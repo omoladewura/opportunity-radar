@@ -1,0 +1,10 @@
+name = "opportunity-radar"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "opportunity-radar-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Phase 3 will add a [triggers] crons block here once the pipeline is stable.
