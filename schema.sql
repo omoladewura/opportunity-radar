@@ -40,6 +40,8 @@ CREATE TABLE opportunities (
   raw_extract TEXT,        -- full AI extraction JSON, for audit
   match_score INTEGER,     -- 0-100, computed against profile
   eligibility_status TEXT, -- eligible | partial | not_eligible
+  scam_risk TEXT,          -- low | medium | high
+  scam_reasons TEXT,       -- JSON array of short flags, e.g. ["upfront payment requested","no verifiable company domain"]
   status TEXT DEFAULT 'new', -- new | saved | applied | dismissed
   discovered_at TEXT,
   FOREIGN KEY (source_id) REFERENCES sources(id)
