@@ -102,8 +102,34 @@ export default {
       });
     }
 
+    // Full stored text for a source, for manual 1E verification:
+    // /raw-text?source_id=1 (defaults to most recent fetch for that source)
+    if (url.pathname === "/raw-text") {
+      const sourceId = Number(url.searchParams.get("source_id"));
+      if (!sourceId) {
+        return new Response("Missing or invalid source_id", { status: 400 });
+      }
+      const row = await env.DB.prepare(
+        `SELECT raw_text, fetched_at FROM raw_pages
+         WHERE source_id = ? ORDER BY fetched_at DESC LIMIT 1`
+      )
+        .bind(sourceId)
+        .first<{ raw_text: string; fetched_at: string }>();
+
+      if (!row) {
+        return new Response(`No raw_pages row for source_id ${sourceId}`, {
+          status: 404,
+        });
+      }
+
+      return new Response(
+        `Fetched at: ${row.fetched_at}\n\n${row.raw_text}`,
+        { headers: { "content-type": "text/plain" } }
+      );
+    }
+
     return new Response(
-      "opportunity-radar Worker\n\nRoutes:\n  GET /sources\n  GET /fetch?source_id=N\n  GET /raw?source_id=N\n",
+      "opportunity-radar Worker\n\nRoutes:\n  GET /sources\n  GET /fetch?source_id=N\n  GET /raw?source_id=N\n  GET /raw-text?source_id=N\n",
       { headers: { "content-type": "text/plain" } }
     );
   },
