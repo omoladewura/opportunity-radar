@@ -3,10 +3,6 @@ export interface Env {
   ANTHROPIC_API_KEY: string;
 }
 
-// Very deliberately dumb HTML->text stripper for Phase 1D. The goal here is
-// only to prove the fetch -> strip -> store round trip. If 1E turns up pages
-// where nav/footer junk dominates, improve this function (or special-case a
-// source) before moving to Phase 2 extraction.
 function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -45,8 +41,6 @@ async function fetchAndStore(
 
   return { ok: res.ok, length: text.length, preview: text.slice(0, 500) };
 }
-
-// ---- Phase 2A/2B: extraction + matching (job/grad-trainee prioritized) ----
 
 interface ExtractedOpportunity {
   title: string;
@@ -102,7 +96,6 @@ async function callClaude(
     );
   }
 
-  // Defensive: strip stray ```json fences if the model adds them anyway.
   return text.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
 }
 
@@ -123,14 +116,14 @@ Return ONLY valid JSON, no preamble, no markdown fences: an array of objects, ea
   "organization": string,
   "category": "scholarship"|"grant"|"fellowship"|"job"|"ngo"|"money",
   "country": string,
-  "deadline": string | null,       // ISO date, "rolling", or null if unknown
+  "deadline": string | null,
   "funding_amount": string | null,
   "salary": string | null,
   "eligibility": string,
   "requirements": string[],
   "application_link": string | null,
   "scam_risk": "low"|"medium"|"high",
-  "scam_reasons": string[]          // short flags, e.g. ["requests bank details upfront"]. Empty array if low risk.
+  "scam_reasons": string[]
 }
 If the page contains no real listings (e.g. an empty search widget, a nav-only page), return an empty array [].`;
 
@@ -143,6 +136,21 @@ ${JSON.stringify(profile)}
 For each listing given, return ONLY valid JSON, no preamble, no markdown fences: an array of objects:
 { "index": number, "match_score": number (0-100), "eligibility_status": "eligible"|"partial"|"not_eligible", "reason": string (one line) }
 "index" refers to the listing's position (0-based) in the input array.`;
+}
+
+function extractJsonArray(raw: string): any {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const start = raw.search(/[[{]/);
+    const lastBracket = raw.lastIndexOf("]");
+    const lastBrace = raw.lastIndexOf("}");
+    const end = Math.max(lastBracket, lastBrace);
+    if (start === -1 || end === -1 || end < start) {
+      throw new Error("no JSON-like content found");
+    }
+    return JSON.parse(raw.slice(start, end + 1));
+  }
 }
 
 async function extractAndMatch(
@@ -159,7 +167,7 @@ async function extractAndMatch(
 
   let listings: ExtractedOpportunity[];
   try {
-    listings = JSON.parse(extractionRaw);
+    listings = extractJsonArray(extractionRaw);
   } catch {
     throw new Error(`Extraction returned non-JSON: ${extractionRaw.slice(0, 300)}`);
   }
@@ -178,7 +186,7 @@ async function extractAndMatch(
 
   let scores: { index: number; match_score: number; eligibility_status: string; reason: string }[];
   try {
-    scores = JSON.parse(matchRaw);
+    scores = extractJsonArray(matchRaw);
   } catch {
     throw new Error(`Matching returned non-JSON: ${matchRaw.slice(0, 300)}`);
   }
@@ -190,7 +198,6 @@ async function extractAndMatch(
 
   for (let i = 0; i < listings.length; i++) {
     const o = listings[i];
-    // Dedup: same title+organization+source already stored.
     const existing = await env.DB.prepare(
       `SELECT id FROM opportunities WHERE source_id = ? AND title = ? AND organization = ?`
     )
@@ -240,7 +247,6 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // Manual trigger for 1D testing: /fetch?source_id=1
     if (url.pathname === "/fetch") {
       const sourceId = Number(url.searchParams.get("source_id"));
       if (!sourceId) {
@@ -269,7 +275,6 @@ export default {
       }
     }
 
-    // Quick sanity check: list sources
     if (url.pathname === "/sources") {
       const { results } = await env.DB.prepare(
         `SELECT id, name, url, category, active, last_crawled_at FROM sources`
@@ -279,7 +284,6 @@ export default {
       });
     }
 
-    // Inspect what got stored for a source: /raw?source_id=1
     if (url.pathname === "/raw") {
       const sourceId = Number(url.searchParams.get("source_id"));
       const { results } = await env.DB.prepare(
@@ -293,8 +297,6 @@ export default {
       });
     }
 
-    // Full stored text for a source, for manual 1E verification:
-    // /raw-text?source_id=1 (defaults to most recent fetch for that source)
     if (url.pathname === "/raw-text") {
       const sourceId = Number(url.searchParams.get("source_id"));
       if (!sourceId) {
@@ -319,8 +321,6 @@ export default {
       );
     }
 
-    // Phase 2A/2B: run extraction + matching on the latest raw fetch for a source.
-    // /extract?source_id=N
     if (url.pathname === "/extract") {
       const sourceId = Number(url.searchParams.get("source_id"));
       if (!sourceId) {
@@ -352,9 +352,6 @@ export default {
       }
     }
 
-    // List extracted opportunities, best matches first: /opportunities
-    // Add ?include_high_risk=1 to also show listings flagged high scam risk
-    // (hidden by default — they're kept in the DB for your own review, not deleted).
     if (url.pathname === "/opportunities") {
       const includeHighRisk = url.searchParams.get("include_high_risk") === "1";
       const { results } = await env.DB.prepare(
