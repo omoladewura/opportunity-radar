@@ -66,7 +66,8 @@ interface ExtractedOpportunity {
 async function callClaude(
   env: Env,
   system: string,
-  userText: string
+  userText: string,
+  maxTokens: number = 2000
 ): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -77,7 +78,7 @@ async function callClaude(
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-5",
-      max_tokens: 2000,
+      max_tokens: maxTokens,
       system,
       messages: [{ role: "user", content: userText }],
     }),
@@ -94,6 +95,12 @@ async function callClaude(
     .map((b: any) => b.text)
     .join("\n")
     .trim();
+
+  if (data.stop_reason === "max_tokens") {
+    throw new Error(
+      `Response was cut off (hit max_tokens=${maxTokens}) before finishing. Raise maxTokens for this call or shrink the input.`
+    );
+  }
 
   // Defensive: strip stray ```json fences if the model adds them anyway.
   return text.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
@@ -146,7 +153,8 @@ async function extractAndMatch(
   const extractionRaw = await callClaude(
     env,
     EXTRACTION_SYSTEM,
-    `Page content:\n${rawText.slice(0, 12000)}`
+    `Page content:\n${rawText.slice(0, 12000)}`,
+    8000
   );
 
   let listings: ExtractedOpportunity[];
