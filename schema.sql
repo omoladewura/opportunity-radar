@@ -21,7 +21,11 @@ CREATE TABLE sources (
   category TEXT,           -- scholarship | grant | fellowship | job | money
   crawl_frequency TEXT,    -- daily | weekly
   active INTEGER DEFAULT 1,
-  last_crawled_at TEXT
+  last_crawled_at TEXT,
+  consecutive_failures INTEGER DEFAULT 0,
+  last_error TEXT,
+  last_error_at TEXT,
+  flagged_dead INTEGER DEFAULT 0  -- set to 1 (and active set to 0) after 3 consecutive failures
 );
 
 CREATE TABLE opportunities (
@@ -44,6 +48,7 @@ CREATE TABLE opportunities (
   scam_reasons TEXT,       -- JSON array of short flags, e.g. ["upfront payment requested","no verifiable company domain"]
   status TEXT DEFAULT 'new', -- new | saved | applied | dismissed
   discovered_at TEXT,
+  emailed_at TEXT,         -- set once this row has been included in a digest email
   FOREIGN KEY (source_id) REFERENCES sources(id)
 );
 

@@ -7,4 +7,8 @@ binding = "DB"
 database_name = "opportunity-radar-db"
 database_id = "9d40c9f3-1797-4a14-81a3-b3f19de36761"
 
-# Phase 3 will add a [triggers] crons block here once the pipeline is stable.
+[triggers]
+# Runs once a day at 6am UTC. The scheduled() handler itself decides which
+# sources are actually "due" based on category + crawl_frequency, so one
+# cron schedule is enough -- no need for separate daily/weekly triggers.
+crons = ["0 6 * * *"]
