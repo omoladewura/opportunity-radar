@@ -113,14 +113,20 @@ async function callClaude(
 
 const EXTRACTION_SYSTEM = `You are extracting structured data from a scraped opportunity listing page (scholarship, grant, fellowship, NGO role, job/graduate-trainee posting, or money-making gig). The page may contain multiple listings mixed with navigation or template noise -- ignore the noise, find the real listing(s).
 
-For each listing, also assess scam/fraud risk using these signals (common in fake job/scholarship posts, especially ones surfaced via Google search rather than a verified employer site):
-- Any request for upfront payment, "training fee", "processing fee", or bank details before hiring/admission
-- Contact only via WhatsApp/Telegram/personal email (gmail/yahoo) with no verifiable company domain or website
-- Salary/funding amount unusually high for the role, location, and stated requirements
-- Urgency pressure language ("apply within 24 hours", "limited slots", "immediate start, no interview")
-- Vague or generic company description with no way to verify the organization exists
-- Application process that redirects off-platform to an unrelated or suspicious site
-If none of these are present, scam_risk is "low". One or two soft signals -> "medium". Any payment request or clearly fake company -> "high".
+For each listing, assess scam/fraud risk carefully and skeptically -- treat this as the most important field, since a missed scam is far more costly than a false alarm on a real listing. Nigerian job/scholarship seekers are a heavily targeted group, especially for postings surfaced via Google search rather than a verified employer site. Look for these signals:
+- Any request for upfront payment, "training fee", "processing fee", "registration fee", refundable deposit, or bank/card details before hiring/admission
+- Contact only via WhatsApp/Telegram/personal email (gmail/yahoo/outlook) with no verifiable company domain, website, or physical address
+- Salary/funding amount unusually high for the stated role, location, experience level, or requirements
+- Urgency or pressure language ("apply within 24 hours", "limited slots", "immediate start, no interview", "act now")
+- Vague or generic company description, stock-photo-style branding, or no way to independently verify the organization exists
+- Application process that redirects off-platform to an unrelated, unofficial, or suspicious site, or asks for application via a file-sharing/chat link rather than a standard ATS or company site
+- Requests for sensitive personal documents (ID, passport, bank statement) before any interview or offer
+- Payment or compensation offered via cryptocurrency, gift cards, or wire transfer to an individual rather than a company account
+- Poor grammar/spelling or inconsistent formatting in what claims to be an official corporate or institutional posting
+- No interview process described at all ("hired immediately upon application")
+- Listing is a duplicate of a real, well-known organization's name but with mismatched contact details or domain (impersonation)
+
+Score conservatively: if you are genuinely unsure whether a signal is present, treat it as present. Zero signals -> "low". Exactly one soft signal (e.g. only generic company description, or only mild urgency language) -> "medium". Two or more signals, OR any single hard signal (upfront payment/fee request, requests for bank/ID details pre-offer, crypto/gift-card payment, impersonation of a real organization) -> "high". When in doubt between two levels, pick the higher-risk one.
 
 Return ONLY valid JSON, no preamble, no markdown fences: an array of objects, each matching this schema:
 {
@@ -138,6 +144,7 @@ Return ONLY valid JSON, no preamble, no markdown fences: an array of objects, ea
   "scam_reasons": string[]
 }
 If the page contains no real listings (e.g. an empty search widget, a nav-only page), return an empty array [].`;
+
 
 function matchSystem(profile: any): string {
   return `You score how well a job/scholarship/grant listing matches this candidate profile, on a 0-100 scale.
@@ -428,7 +435,7 @@ async function sendDigest(
      FROM opportunities
      WHERE emailed_at IS NULL
        AND match_score >= ?
-       AND (scam_risk IS NULL OR scam_risk != 'high')
+       AND (scam_risk IS NULL OR scam_risk = 'low')
      ORDER BY match_score DESC`
   )
     .bind(DIGEST_MIN_SCORE)
@@ -638,10 +645,14 @@ const DASHBOARD_HTML = `<!doctype html>
   <select id="categoryFilter">
     <option value="all">All categories</option>
   </select>
+  <select id="countryFilter">
+    <option value="all">All countries</option>
+  </select>
+  <button class="tab" id="entryToggle">Entry-level / GT only</button>
   <select id="riskFilter">
+    <option value="low">Clean only (hide medium + high risk)</option>
+    <option value="hide_high">Hide high-risk only</option>
     <option value="all">All risk levels</option>
-    <option value="hide_high">Hide high-risk</option>
-    <option value="low">Low risk only</option>
   </select>
 </div>
 
@@ -672,7 +683,23 @@ let sortKey = "match_score";
 let sortDir = "desc";
 let statusFilter = "all";
 let categoryFilter = "all";
-let riskFilter = "all";
+let countryFilter = "nigeria_remote"; // default focus; "all" or "nigeria_remote" or an exact country
+let entryOnly = true; // default focus: entry-level / GT only
+let riskFilter = "low"; // default focus: show only clean listings; user can loosen this anytime
+
+const ENTRY_LEVEL_RE = /graduate trainee|\bgt\b|entry[\s-]?level|\bjunior\b|\btrainee\b|\binternship\b|\bintern\b|\bnysc\b|fresh graduate|new grad/i;
+
+function isRemote(r) {
+  const country = (r.country || "").toLowerCase();
+  const title = (r.title || "").toLowerCase();
+  return !country || country.includes("remote") || country.includes("anywhere") ||
+    country.includes("not specified") || country.includes("worldwide") || title.includes("remote");
+}
+
+function isNigeriaOrRemote(r) {
+  const country = (r.country || "").toLowerCase();
+  return country.includes("nigeria") || isRemote(r);
+}
 
 async function load() {
   document.getElementById("loading").style.display = "block";
@@ -680,6 +707,7 @@ async function load() {
   const res = await fetch("/opportunities?include_high_risk=1");
   allRows = await res.json();
   populateCategoryFilter();
+  populateCountryFilter();
   render();
   document.getElementById("meta").textContent = allRows.length + " tracked · updated " + new Date().toLocaleTimeString();
 }
@@ -691,6 +719,15 @@ function populateCategoryFilter() {
   sel.innerHTML = '<option value="all">All categories</option>' +
     cats.map(c => '<option value="' + c + '">' + c + '</option>').join("");
   sel.value = cats.includes(current) ? current : "all";
+}
+
+function populateCountryFilter() {
+  const sel = document.getElementById("countryFilter");
+  const countries = Array.from(new Set(allRows.map(r => r.country).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="all">All countries</option>' +
+    '<option value="nigeria_remote">Nigeria + Remote</option>' +
+    countries.map(c => '<option value="' + c + '">' + c + '</option>').join("");
+  sel.value = countryFilter;
 }
 
 function scoreClass(s) {
@@ -714,6 +751,9 @@ function render() {
 
   if (statusFilter !== "all") rows = rows.filter(r => (r.status || "new") === statusFilter);
   if (categoryFilter !== "all") rows = rows.filter(r => r.category === categoryFilter);
+  if (countryFilter === "nigeria_remote") rows = rows.filter(isNigeriaOrRemote);
+  else if (countryFilter !== "all") rows = rows.filter(r => r.country === countryFilter);
+  if (entryOnly) rows = rows.filter(r => ENTRY_LEVEL_RE.test(r.title || ""));
   if (riskFilter === "hide_high") rows = rows.filter(r => r.scam_risk !== "high");
   if (riskFilter === "low") rows = rows.filter(r => (r.scam_risk || "low") === "low");
 
@@ -787,14 +827,29 @@ async function setStatus(id, status) {
   render();
 }
 
-document.querySelectorAll(".tab").forEach(btn => {
+document.querySelectorAll(".tab[data-status]").forEach(btn => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab[data-status]").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     statusFilter = btn.dataset.status;
     render();
   });
 });
+
+document.getElementById("countryFilter").addEventListener("change", e => {
+  countryFilter = e.target.value;
+  render();
+});
+
+const entryToggleBtn = document.getElementById("entryToggle");
+entryToggleBtn.classList.toggle("active", entryOnly);
+entryToggleBtn.addEventListener("click", () => {
+  entryOnly = !entryOnly;
+  entryToggleBtn.classList.toggle("active", entryOnly);
+  render();
+});
+
+document.getElementById("riskFilter").value = riskFilter;
 
 document.getElementById("categoryFilter").addEventListener("change", e => {
   categoryFilter = e.target.value;
