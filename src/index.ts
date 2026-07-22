@@ -54,6 +54,7 @@ async function fetchAndStore(
   return { ok: res.ok, length: text.length, preview: text.slice(0, 500) };
 }
 
+
 interface ExtractedOpportunity {
   title: string;
   organization: string;
@@ -177,11 +178,16 @@ async function extractAndMatch(
   sourceId: number,
   rawText: string
 ): Promise<{ inserted: number; skipped: number }> {
+  // NOTE: this used to slice at 12000 chars, which was fine for sources with
+  // a short nav section but silently cut off ALL real listings on
+  // menu-heavy pages (e.g. HotNigerianJobs' category/role/state filter list
+  // runs tens of thousands of characters before any actual job posting).
+  // 60000 chars gives real headroom; Claude's context window handles it easily.
   const extractionRaw = await callClaude(
     env,
     EXTRACTION_SYSTEM,
-    `Page content:\n${rawText.slice(0, 12000)}`,
-    8000
+    `Page content:\n${rawText.slice(0, 60000)}`,
+    16000 // was 8000 -- pages with 30-40+ listings (like HotNigerianJobs) need more room
   );
 
   let listings: ExtractedOpportunity[];
@@ -200,7 +206,8 @@ async function extractAndMatch(
   const matchRaw = await callClaude(
     env,
     matchSystem(profile),
-    `Listings:\n${JSON.stringify(listings)}`
+    `Listings:\n${JSON.stringify(listings)}`,
+    6000 // was defaulting to 2000 -- too small once a page yields 30-40 listings to score
   );
 
   let scores: { index: number; match_score: number; eligibility_status: string; reason: string }[];
