@@ -281,12 +281,50 @@ function isDue(source: { crawl_frequency: string; last_crawled_at: string | null
   return hoursSince >= 24 - 1;
 }
 
+// Errors that reflect a Cloudflare platform/runtime limit, not the actual
+// health of the source's website. These still get logged so you can see
+// them via /dead-sources, but they must never count toward
+// consecutive_failures -- otherwise a resource ceiling (subrequests, CPU
+// time, etc.) looks identical to a genuinely broken site and the source
+// gets auto-deactivated for no fault of its own. This is what happened
+// before sharding: 10 healthy sources got flagged dead purely because the
+// cron run exceeded the free-plan subrequest limit partway through.
+const INFRA_ERROR_PATTERNS = [
+  /too many subrequests/i,
+  /exceeded.*cpu/i,
+  /exceeded.*memory/i,
+  /worker threw exception/i,
+];
+
+function isInfraError(errorMessage: string): boolean {
+  return INFRA_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage));
+}
+
 async function recordSourceFailure(
   env: Env,
   sourceId: number,
   errorMessage: string
 ): Promise<{ newlyFlagged: boolean; failureCount: number }> {
   const now = new Date().toISOString();
+
+  if (isInfraError(errorMessage)) {
+    // Log the error for visibility but leave consecutive_failures and
+    // active untouched -- this wasn't the source's fault.
+    await env.DB.prepare(
+      `UPDATE sources SET last_error = ?, last_error_at = ? WHERE id = ?`
+    )
+      .bind(errorMessage.slice(0, 500), now, sourceId)
+      .run();
+
+    const row = await env.DB.prepare(
+      `SELECT consecutive_failures FROM sources WHERE id = ?`
+    )
+      .bind(sourceId)
+      .first<{ consecutive_failures: number }>();
+
+    return { newlyFlagged: false, failureCount: row?.consecutive_failures ?? 0 };
+  }
+
   const row = await env.DB.prepare(
     `SELECT consecutive_failures FROM sources WHERE id = ?`
   )
@@ -325,7 +363,18 @@ async function recordSourceSuccess(env: Env, sourceId: number): Promise<void> {
     .run();
 }
 
-async function runScheduledCrawl(env: Env): Promise<void> {
+// Free Workers plan caps a single invocation at 50 subrequests. Each source
+// costs ~3 (1 page fetch + 2 Claude calls), so running everything "due" in
+// one invocation overflows once the active source count creeps past ~15.
+// Sources beyond the budget failed with "Too many subrequests", which
+// recordSourceFailure treated as a real site failure and auto-deactivated
+// them after 3 runs -- punishing healthy sources for a platform limit, not
+// an actual dead site. Fix: shard the crawl across 3 daily cron firings
+// (see wrangler.toml) by `id % TOTAL_SHARDS`, so every daily source still
+// gets crawled once per 24h, just spread across 3 smaller invocations.
+const TOTAL_SHARDS = 3;
+
+async function runScheduledCrawl(env: Env, shard: number): Promise<void> {
   const { results } = await env.DB.prepare(
     `SELECT id, url, category, crawl_frequency, last_crawled_at
      FROM sources WHERE active = 1`
@@ -340,6 +389,7 @@ async function runScheduledCrawl(env: Env): Promise<void> {
   const newlyFlagged: { id: number; category: string }[] = [];
 
   for (const source of results) {
+    if (source.id % TOTAL_SHARDS !== shard) continue;
     if (!isDue(source)) continue;
 
     try {
@@ -887,7 +937,17 @@ export default {
     env: Env,
     ctx: ExecutionContext
   ): Promise<void> {
-    ctx.waitUntil(runScheduledCrawl(env));
+    // Each cron string in wrangler.toml's `crons` array maps to a shard, so
+    // the 3 daily firings split the active-source list roughly into thirds
+    // (see runScheduledCrawl / TOTAL_SHARDS) instead of one run trying to
+    // crawl everything and blowing the free-plan subrequest limit.
+    const shardByCron: Record<string, number> = {
+      "0 6 * * *": 0,
+      "0 14 * * *": 1,
+      "0 22 * * *": 2,
+    };
+    const shard = shardByCron[controller.cron] ?? 0;
+    ctx.waitUntil(runScheduledCrawl(env, shard));
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -1004,10 +1064,14 @@ export default {
       // Manual trigger for testing the scheduled crawl logic without
       // waiting for the actual Cron Trigger to fire. Same isDue() +
       // per-source error handling as the real scheduled() handler.
-      await runScheduledCrawl(env);
+      // ?shard=0|1|2 lets you test one shard at a time (each shard only
+      // touches ~1/3 of active sources -- see TOTAL_SHARDS); omitting it
+      // defaults to shard 0.
+      const shard = Number(url.searchParams.get("shard") ?? "0");
+      await runScheduledCrawl(env, shard);
       return new Response(
-        "Cron logic ran manually. Check /sources for updated last_crawled_at, " +
-          "and /opportunities for new rows. Check the Logs tab for [cron] entries.",
+        `Cron logic ran manually for shard ${shard}. Check /sources for updated ` +
+          "last_crawled_at, and /opportunities for new rows. Check the Logs tab for [cron] entries.",
         { headers: { "content-type": "text/plain" } }
       );
     }
