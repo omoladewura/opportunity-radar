@@ -75,6 +75,34 @@ If a source is dominated by junk, options in order of effort:
 Once 2-3 sources look clean, Phase 1 is done — move to Phase 2 (extraction
 prompt + dashboard).
 
+## Operational notes (post-launch)
+
+### Frozen source categories (scholarship / fellowship / grant)
+
+As of 2026-07-23, the `scholarship`, `fellowship`, and `grant` category
+sources were deliberately frozen (`active = 0`) to cut Claude API costs
+while focusing on active job search. This was NOT a bug or a dead-source
+flag — it's an intentional pause.
+
+**To reactivate them, run this in the D1 console:**
+```sql
+UPDATE sources SET active = 1
+WHERE category IN ('scholarship', 'fellowship', 'grant');
+```
+
+**To freeze them again later:**
+```sql
+UPDATE sources SET active = 0
+WHERE category IN ('scholarship', 'fellowship', 'grant');
+```
+
+The `ngo` category (ReliefWeb, Idealist, NGO Jobs in Africa) was deliberately
+left active since those are job listings, not scholarships/grants, despite
+the category name.
+
+You can always check current state via `GET /sources` — frozen sources show
+`"active": 0`.
+
 ## Deploying (optional at this stage)
 
 ```bash
