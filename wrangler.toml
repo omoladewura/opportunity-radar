@@ -8,7 +8,10 @@ database_name = "opportunity-radar-db"
 database_id = "9d40c9f3-1797-4a14-81a3-b3f19de36761"
 
 [triggers]
-# Runs once a day at 6am UTC. The scheduled() handler itself decides which
-# sources are actually "due" based on category + crawl_frequency, so one
-# cron schedule is enough -- no need for separate daily/weekly triggers.
-crons = ["0 6 * * *"]
+# 3 firings a day, one per shard (see TOTAL_SHARDS / runScheduledCrawl in
+# src/index.ts). Each shard only processes ~1/3 of active sources by
+# `id % 3`, so every daily source still gets crawled once per 24h, but no
+# single invocation risks the free-plan 50-subrequest ceiling. The
+# scheduled() handler maps each cron string below to its shard number --
+# if you edit these times, update the shardByCron map in index.ts too.
+crons = ["0 6 * * *", "0 14 * * *", "0 22 * * *"]
